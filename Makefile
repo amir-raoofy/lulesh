@@ -56,9 +56,8 @@ lulesh2.0: $(OBJECTS2.0)
 	$(CXX) $(OBJECTS2.0) $(LDFLAGS) -lm -o $@
 
 clean:
-	/bin/rm -f *.o *~ $(OBJECTS) $(LULESH_EXEC)
+	/bin/rm -f *.o *.d *~ $(OBJECTS) $(LULESH_EXEC)
 	/bin/rm -rf *.dSYM
 
 tar: clean
 	cd .. ; tar cvf lulesh-2.0.tar LULESH-2.0 ; mv lulesh-2.0.tar LULESH-2.0
-

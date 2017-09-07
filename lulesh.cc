@@ -1184,6 +1184,25 @@ void CalcAccelerationForNodes(Domain &domain, Index_t numNode)
 /******************************************/
 
 static inline
+void LaikCalcAccelerationForNodes(Domain &domain, Laik_Partitioning* p, Laik_Data* d)
+{
+
+      double* base;
+      uint64_t count;
+      laik_switchto(d, p, LAIK_DF_CopyOut);
+      laik_map_def1(d, (void **)&base, &count);
+
+#pragma omp parallel for firstprivate(count)
+   for (Index_t i = 0; i < (Index_t)count; ++i) {
+      domain.xdd(i) = domain.fx(i) / base[i];
+      domain.ydd(i) = domain.fy(i) / base[i];
+      domain.zdd(i) = domain.fz(i) / base[i];
+   }
+}
+
+/******************************************/
+
+static inline
 void ApplyAccelerationBoundaryConditionsForNodes(Domain& domain)
 {
    Index_t size = domain.sizeX();
@@ -1254,7 +1273,7 @@ void CalcPositionForNodes(Domain &domain, const Real_t dt, Index_t numNode)
 /******************************************/
 
 static inline
-void LagrangeNodal(Domain& domain)
+void LagrangeNodal(Domain& domain, Laik_Partitioning* p, Laik_Data* d)
 {
 #ifdef SEDOV_SYNC_POS_VEL_EARLY
    Domain_member fieldData[6] ;
@@ -1275,7 +1294,9 @@ void LagrangeNodal(Domain& domain)
 #endif
 #endif
    
-   CalcAccelerationForNodes(domain, domain.numNode());
+   //CalcAccelerationForNodes(domain, domain.numNode());
+
+   LaikCalcAccelerationForNodes(domain, p, d);
    
    ApplyAccelerationBoundaryConditionsForNodes(domain);
 
@@ -2642,7 +2663,7 @@ void CalcTimeConstraintsForElems(Domain& domain) {
 /******************************************/
 
 static inline
-void LagrangeLeapFrog(Domain& domain)
+void LagrangeLeapFrog(Domain& domain, Laik_Partitioning* p, Laik_Data* d)
 {
 #ifdef SEDOV_SYNC_POS_VEL_LATE
    Domain_member fieldData[6] ;
@@ -2650,7 +2671,7 @@ void LagrangeLeapFrog(Domain& domain)
 
    /* calculate nodal forces, accelerations, velocities, positions, with
     * applied boundary conditions and slide surface considerations */
-   LagrangeNodal(domain);
+   LagrangeNodal(domain, p, d);
 
 
 #ifdef SEDOV_SYNC_POS_VEL_LATE
@@ -2701,13 +2722,21 @@ int main(int argc, char *argv[])
 #if USE_MPI   
    Domain_member fieldData ;
 
-   Laik_Instance* inst = laik_init_mpi(&argc, &argv); 
+   // create an instance of laik and let like initialize MPI
+   Laik_Instance* inst = laik_init_mpi(&argc, &argv);
+
+   // create a group of tasks
+   Laik_Group* world = laik_world(inst);
+
    MPI_Comm_size(MPI_COMM_WORLD, &numRanks) ;
    MPI_Comm_rank(MPI_COMM_WORLD, &myRank) ;
+
 #else
    numRanks = 1;
    myRank = 0;
 #endif   
+
+   laik_set_phase(inst, 0, "init", NULL);
 
    /* Set defaults that can be overridden by command line opts */
    opts.its = 9999999;
@@ -2738,14 +2767,38 @@ int main(int argc, char *argv[])
       printf("See help (-h) for more options\n\n");
    }
 
+   // define the 3D index space 
+   Laik_Space* space = laik_new_space_1d(inst, opts.nx * opts.nx * opts.nx * numRanks);
+
+   // two 3D arrays for storing fields
+   Laik_Data *data1 = laik_alloc(world, space, laik_Double);
+   Laik_Data *data2 = laik_alloc(world, space, laik_Double);
+
+   // two partitionings:
+   // - pWrite: distributes the cells to update
+   // - pRead : extends pWrite partitions to allow reading neighbor values
+   // partitionings are assigned to either data1/data2, exchanged after
+   // every iteration
+   Laik_Partitioning *pWrite, *pRead;
+   pWrite = laik_new_partitioning(world, space,
+                                  laik_new_bisection_partitioner(), 0);
+   // this extends pWrite partitions at borders by 1 index on inner borders
+   // (the coupling is dynamic: any change in pWrite changes pRead)
+   pRead = laik_new_partitioning(world, space,
+                                 laik_new_halo_partitioner(1), pWrite);
+
+   // start with writing (= initialization) data1
+   Laik_Data *dWrite = data1;
+   Laik_Data *dRead = data2;
+
+   // replacing the next two functions
    // Set up the mesh and decompose. Assumes regular cubes for now
    Int_t col, row, plane, side;
    InitMeshDecomp(numRanks, myRank, &col, &row, &plane, &side);
 
    // Build the main data structure and initialize it
    locDom = new Domain(numRanks, col, row, plane, opts.nx,
-                       side, opts.numReg, opts.balance, opts.cost) ;
-
+                       side, opts.numReg, opts.balance, opts.cost,  pWrite, dWrite) ;
 
 #if USE_MPI   
    fieldData = &Domain::nodalMass ;
@@ -2776,7 +2829,7 @@ int main(int argc, char *argv[])
    while((locDom->time() < locDom->stoptime()) && (locDom->cycle() < opts.its)) {
 
       TimeIncrement(*locDom) ;
-      LagrangeLeapFrog(*locDom) ;
+      LagrangeLeapFrog(*locDom, pWrite, dWrite) ;
 
       if ((opts.showProg != 0) && (opts.quiet == 0) && (myRank == 0)) {
          printf("cycle = %d, time = %e, dt=%e\n",

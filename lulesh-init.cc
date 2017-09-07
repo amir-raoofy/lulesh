@@ -15,7 +15,7 @@
 /////////////////////////////////////////////////////////////////////
 Domain::Domain(Int_t numRanks, Index_t colLoc,
                Index_t rowLoc, Index_t planeLoc,
-               Index_t nx, int tp, int nr, int balance, Int_t cost)
+               Index_t nx, int tp, int nr, int balance, Int_t cost, Laik_Partitioning* part, Laik_Data* data)
    :
    m_e_cut(Real_t(1.0e-7)),
    m_p_cut(Real_t(1.0e-7)),
@@ -48,6 +48,12 @@ Domain::Domain(Int_t numRanks, Index_t colLoc,
    ///////////////////////////////
    //   Initialize Sedov Mesh
    ///////////////////////////////
+
+   // laik stuff
+   double* base;
+   uint64_t count;
+   laik_switchto(data, part, LAIK_DF_CopyOut);
+   laik_map_def1(data, (void **)&base, &count);
 
    // construct a uniform box for this processor
 
@@ -100,6 +106,10 @@ Domain::Domain(Int_t numRanks, Index_t colLoc,
    for (Index_t i=0; i<numNode(); ++i) {
       nodalMass(i) = Real_t(0.0) ;
    }
+
+   for (uint64_t i=0; i<count; ++i) {
+    base[i] = 0.0 ;
+  }
 
    BuildMesh(nx, edgeNodes, edgeElems);
 
@@ -164,6 +174,7 @@ Domain::Domain(Int_t numRanks, Index_t colLoc,
       for (Index_t j=0; j<8; ++j) {
          Index_t idx = elemToNode[j] ;
          nodalMass(idx) += volume / Real_t(8.0) ;
+         base[idx]=nodalMass(idx);
       }
    }
 

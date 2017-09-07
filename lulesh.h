@@ -24,6 +24,12 @@
 #include <math.h>
 #include <vector>
 
+
+/*laik headers*/
+extern "C"{
+  #include "laik.h"
+}
+
 //**************************************************
 // Allow flexibility for arithmetic representations 
 //**************************************************
@@ -131,7 +137,7 @@ class Domain {
    // Constructor
    Domain(Int_t numRanks, Index_t colLoc,
           Index_t rowLoc, Index_t planeLoc,
-          Index_t nx, Int_t tp, Int_t nr, Int_t balance, Int_t cost);
+          Index_t nx, Int_t tp, Int_t nr, Int_t balance, Int_t cost, Laik_Partitioning* part, Laik_Data* data);
 
    //
    // ALLOCATION
